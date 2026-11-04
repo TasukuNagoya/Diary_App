@@ -64,8 +64,17 @@ def save_entry():
     data = (st.session_state.diary_date.isoformat(),) + tuple(st.session_state[k].strip() for k in ('breakfast', 'lunch', 'dinner', 'content'))
     with connect() as conn:
         conn.execute('INSERT INTO diary_entries (diary_date, breakfast, lunch, dinner, content) VALUES (?, ?, ?, ?, ?)', data)
-    clear_form()
+    st.session_state.pending_clear = True
     st.session_state.notice = '日記を保存しました。'
+
+
+def delete_entry():
+    entry_id = st.session_state.selected_id
+    if entry_id is not None:
+        with connect() as conn:
+            conn.execute('DELETE FROM diary_entries WHERE id=?', (entry_id,))
+        st.session_state.pending_clear = True
+        st.session_state.notice = '日記を削除しました。'
 
 
 def update_entry():
@@ -76,18 +85,25 @@ def update_entry():
     data = (st.session_state.diary_date.isoformat(),) + tuple(st.session_state[k].strip() for k in ('breakfast', 'lunch', 'dinner', 'content')) + (entry_id,)
     with connect() as conn:
         conn.execute('UPDATE diary_entries SET diary_date=?, breakfast=?, lunch=?, dinner=?, content=? WHERE id=?', data)
-    clear_form()
+    st.session_state.pending_clear = True
     st.session_state.notice = '日記を更新しました。'
 
 
 init_db()
-if 'selected_id' not in st.session_state:
+if st.session_state.pop('restore_completed', False):
+    st.session_state.pending_clear = True
+    st.session_state.notice = 'バックアップを復元しました。'
+if st.session_state.pop('pending_clear', False) or 'selected_id' not in st.session_state:
     clear_form()
+selection = st.session_state.pop('pending_selection', None)
+if selection is not None:
+    select_entry(selection)
 
 st.title('📔 日記帳')
 st.caption('食事と日々の出来事を記録できます。')
-if st.session_state.pop('notice', None):
-    st.success('保存内容を反映しました。')
+notice = st.session_state.pop('notice', None)
+if notice:
+    st.success(notice)
 
 st.subheader('日記入力・編集')
 if st.session_state.selected_id is not None:
@@ -105,30 +121,28 @@ with st.form('diary_form'):
     st.text_area('日記本文', key='content', height=180)
     c1, c2 = st.columns(2)
     with c1:
-        save = st.form_submit_button('新規保存', use_container_width=True)
+        save_clicked = st.form_submit_button('新規保存', use_container_width=True)
     with c2:
-        update = st.form_submit_button('更新', use_container_width=True, disabled=st.session_state.selected_id is None)
-if save:
+        update_clicked = st.form_submit_button('更新', use_container_width=True, disabled=st.session_state.selected_id is None)
+
+if save_clicked:
     save_entry()
     st.rerun()
-if update:
+if update_clicked:
     update_entry()
     st.rerun()
 
 c1, c2 = st.columns(2)
 with c1:
     if st.button('入力欄をクリア', use_container_width=True):
-        clear_form()
+        st.session_state.pending_clear = True
         st.rerun()
 with c2:
     if st.session_state.selected_id is not None:
         with st.popover('選択中の日記を削除', use_container_width=True):
             st.warning('この日記を削除しますか？ この操作は取り消せません。')
             if st.button('削除を確定', type='primary'):
-                with connect() as conn:
-                    conn.execute('DELETE FROM diary_entries WHERE id=?', (st.session_state.selected_id,))
-                clear_form()
-                st.session_state.notice = '日記を削除しました。'
+                delete_entry()
                 st.rerun()
 
 st.divider()
@@ -152,7 +166,7 @@ else:
                           format_func=lambda i: f"{df.loc[df['id'] == i, 'diary_date'].iloc[0]}（ID: {i}）",
                           index=None, placeholder='日記を選択してください')
     if st.button('選択した日記を編集欄に読み込む', disabled=chosen is None):
-        select_entry(int(chosen))
+        st.session_state.pending_selection = int(chosen)
         st.rerun()
 
 st.divider()
@@ -188,8 +202,7 @@ if uploaded is not None:
                         source.backup(target)
                 finally:
                     source.close()
-            clear_form()
-            st.success('バックアップを復元しました。')
+            st.session_state.restore_completed = True
             st.rerun()
         except (sqlite3.Error, ValueError) as exc:
             st.error(f'復元できませんでした: {exc}')
